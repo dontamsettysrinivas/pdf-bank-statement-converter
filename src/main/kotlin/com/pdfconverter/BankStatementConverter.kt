@@ -1,16 +1,25 @@
 package com.pdfconverter
 
+import com.pdfconverter.extraction.CharacterExtractor
+import com.pdfconverter.headers.HeaderDetector
+import com.pdfconverter.parser.BankStatementParser
+import com.pdfconverter.export.CsvExporter
+import com.pdfconverter.model.Transaction
 import org.apache.pdfbox.pdmodel.PDDocument
-import org.apache.pdfbox.text.PDFTextStripper
 import java.io.File
 
 /**
  * Main class for converting bank statement PDFs to CSV format.
  * Follows the architecture from Angus Cheng's Bank Statement Converter.
  * 
- * https://bankstatementconverter.com/book
+ * @see https://bankstatementconverter.com/book
  */
 class BankStatementConverter {
+    
+    private val extractor = CharacterExtractor()
+    private val headerDetector = HeaderDetector()
+    private val parser = BankStatementParser(headerDetector)
+    private val exporter = CsvExporter()
     
     /**
      * Extracts transactions from a PDF bank statement file
@@ -20,89 +29,103 @@ class BankStatementConverter {
      */
     fun extractTransactions(pdfPath: String): List<Transaction> {
         try {
-            val document = PDDocument.load(File(pdfPath))
-            val transactions = mutableListOf<Transaction>()
-            
-            for (pageNum in 0 until document.numberOfPages) {
-                val page = document.getPage(pageNum)
-                // TODO: Implement character extraction
-                // Step 1: Extract characters with bounding boxes using FastCharacterParser
-                // Step 2: Merge characters into words
-                // Step 3: Detect transaction table headers
-                // Step 4: Map words to columns
-                // Step 5: Create Transaction objects
+            val pdfFile = File(pdfPath)
+            if (!pdfFile.exists()) {
+                throw IllegalArgumentException("PDF file not found: $pdfPath")
             }
             
-            document.close()
-            return transactions
+            val allTransactions = mutableListOf<Transaction>()
+            
+            // Load PDF document
+            PDDocument.load(pdfFile).use { document ->
+                println("Processing PDF with ${document.numberOfPages} pages...")
+                
+                // Process each page
+                for (pageNum in 0 until document.numberOfPages) {
+                    val page = document.getPage(pageNum)
+                    println("Processing page ${pageNum + 1}...")
+                    
+                    // Extract characters from page
+                    val characters = extractor.extractCharacters(page)
+                    println("  Extracted ${characters.size} characters")
+                    
+                    // Parse transactions from characters
+                    val transactions = parser.parseTransactions(characters)
+                    println("  Found ${transactions.size} transactions")
+                    
+                    allTransactions.addAll(transactions)
+                }
+            }
+            
+            println("Total transactions extracted: ${allTransactions.size}")
+            return allTransactions
+            
         } catch (e: Exception) {
-            throw RuntimeException("Failed to extract transactions from PDF: ${e.message}", e)
+            println("Error extracting transactions: ${e.message}")
+            e.printStackTrace()
+            return emptyList()
         }
     }
     
     /**
-     * Exports transactions to a CSV file
+     * Converts a PDF bank statement to CSV format
      * 
-     * @param transactions List of transactions to export
-     * @param outputPath Path for the output CSV file
+     * @param pdfPath Path to the input PDF file
+     * @param csvPath Path to the output CSV file
+     * @return Number of transactions converted
      */
-    fun exportToCSV(transactions: List<Transaction>, outputPath: String) {
+    fun convertToCSV(pdfPath: String, csvPath: String): Int {
         try {
-            val file = File(outputPath)
-            file.bufferedWriter().use { writer ->
-                // Write header
-                writer.write("Date,Description,Debit,Credit,Balance\n")
-                
-                // Write transactions
-                for (transaction in transactions) {
-                    writer.write(transaction.toCSV())
-                    writer.write("\n")
-                }
+            // Extract transactions from PDF
+            val transactions = extractTransactions(pdfPath)
+            
+            if (transactions.isEmpty()) {
+                println("No transactions found in PDF")
+                return 0
             }
-            println("Exported ${transactions.size} transactions to $outputPath")
+            
+            // Export transactions to CSV
+            val csvFile = File(csvPath)
+            exporter.exportToCsv(transactions, csvFile)
+            
+            println("Successfully exported ${transactions.size} transactions to $csvPath")
+            return transactions.size
+            
         } catch (e: Exception) {
-            throw RuntimeException("Failed to export transactions to CSV: ${e.message}", e)
+            println("Error converting PDF to CSV: ${e.message}")
+            e.printStackTrace()
+            return 0
         }
     }
 }
 
 /**
- * Data class representing a single transaction
+ * Main function for command-line usage
  */
-data class Transaction(
-    val date: String,
-    val description: String,
-    val debit: Double = 0.0,
-    val credit: Double = 0.0,
-    val balance: Double = 0.0
-) {
-    fun toCSV(): String {
-        val debitStr = if (debit > 0) debit.toString() else ""
-        val creditStr = if (credit > 0) credit.toString() else ""
-        return "\"$date\",\"$description\",\"$debitStr\",\"$creditStr\",\"$balance\""
-    }
-}
-
 fun main(args: Array<String>) {
-    if (args.isEmpty()) {
-        println("Usage: java -jar converter.jar <input.pdf> [output.csv]")
+    if (args.size < 2) {
+        println("Usage: BankStatementConverter <input.pdf> <output.csv>")
+        println("Example: BankStatementConverter statement.pdf transactions.csv")
         return
     }
     
-    val inputPath = args[0]
-    val outputPath = args.getOrNull(1) ?: "output.csv"
+    val pdfPath = args[0]
+    val csvPath = args[1]
+    
+    println("PDF Bank Statement Converter")
+    println("=============================")
+    println("Input:  $pdfPath")
+    println("Output: $csvPath")
+    println()
     
     val converter = BankStatementConverter()
+    val count = converter.convertToCSV(pdfPath, csvPath)
     
-    try {
-        println("Extracting transactions from: $inputPath")
-        val transactions = converter.extractTransactions(inputPath)
-        println("Found ${transactions.size} transactions")
-        
-        converter.exportToCSV(transactions, outputPath)
-        println("✓ Successfully converted to: $outputPath")
-    } catch (e: Exception) {
-        println("✗ Error: ${e.message}")
-        e.printStackTrace()
+    println()
+    if (count > 0) {
+        println("✓ Conversion completed successfully!")
+        println("  Transactions converted: $count")
+    } else {
+        println("✗ Conversion failed or no transactions found")
     }
 }
